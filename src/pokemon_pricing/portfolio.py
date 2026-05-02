@@ -48,6 +48,8 @@ VALUE_COLUMNS = [
     "item_type",
     "card_id",
     "name",
+    "set_name",
+    "rarity",
     "product_name",
     "image_url",
     "tcg_price_type",
@@ -109,6 +111,8 @@ def value_portfolio(
     if not card_holdings.empty:
         columns = VARIANT_KEY_COLUMNS + [
             "name",
+            "set_name",
+            "rarity",
             "image_small",
             "image_large",
             "modeled_fair_price",
@@ -127,6 +131,7 @@ def value_portfolio(
             .fillna(card_values["observed_price"])
             .fillna(card_values["estimated_unit_value"])
         )
+        card_values["image_url"] = card_values["image_url"].replace("", pd.NA)
         if "image_large" in card_values.columns:
             card_values["image_url"] = card_values["image_url"].fillna(card_values["image_large"])
         if "image_small" in card_values.columns:
@@ -247,6 +252,7 @@ def recommend_cards(
 def build_dashboard(
     valued: pd.DataFrame,
     recommendations: pd.DataFrame,
+    catalog: pd.DataFrame | None = None,
     history_path: Path = PORTFOLIO_DIR / "portfolio_value_history.csv",
     output_path: Path = PROCESSED_DIR / "portfolio_dashboard.html",
 ) -> Path:
@@ -260,6 +266,7 @@ def build_dashboard(
         "cards": cards,
         "holdings": valued.fillna("").to_dict(orient="records"),
         "recommendations": recommendations.fillna("").to_dict(orient="records"),
+        "catalog": _catalog_records(catalog),
         "history": history.fillna("").to_dict(orient="records"),
     }
     html = _dashboard_html(payload)
@@ -436,7 +443,7 @@ def _card_summary(valued: pd.DataFrame) -> list[dict[str, Any]]:
     if cards.empty:
         return []
     grouped = (
-        cards.groupby(["card_id", "name"], dropna=False)
+        cards.groupby(["card_id", "name", "set_name"], dropna=False)
         .agg(
             total_estimated_value=("total_estimated_value", "sum"),
             copies_owned=("copies_owned", "sum"),
@@ -446,6 +453,29 @@ def _card_summary(valued: pd.DataFrame) -> list[dict[str, Any]]:
         .sort_values("total_estimated_value", ascending=False)
     )
     return grouped.to_dict(orient="records")
+
+
+def _catalog_records(catalog: pd.DataFrame | None) -> list[dict[str, Any]]:
+    if catalog is None or catalog.empty:
+        return []
+    columns = [
+        "card_id",
+        "name",
+        "set_name",
+        "rarity",
+        "image_large",
+        "tcg_price_type",
+        "market_segment",
+        "condition",
+        "grading_company",
+        "grade",
+        "modeled_fair_price",
+        "observed_price",
+        "pricing_label",
+    ]
+    available = [column for column in columns if column in catalog.columns]
+    records = catalog[available].copy()
+    return records.fillna("").to_dict(orient="records")
 
 
 def _dashboard_html(payload: dict[str, Any]) -> str:
@@ -464,13 +494,15 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
     h1 {{ margin: 0 0 16px; font-size: 28px; letter-spacing: 0; }}
     main {{ padding: 24px 32px 40px; display: grid; gap: 24px; }}
     .stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }}
-    .stat, .panel, .card-row {{ background: #ffffff; border: 1px solid #ddded8; border-radius: 8px; }}
+    .stat, .panel, .card-row, .owned-card {{ background: #ffffff; border: 1px solid #ddded8; border-radius: 8px; }}
     .stat {{ padding: 14px; }}
     .label {{ color: #667078; font-size: 12px; text-transform: uppercase; }}
     .value {{ font-size: 24px; font-weight: 700; margin-top: 4px; }}
     .grid {{ display: grid; grid-template-columns: minmax(220px, 340px) 1fr; gap: 18px; align-items: start; }}
     .panel {{ padding: 16px; }}
-    select {{ width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #b7bbb2; font-size: 14px; }}
+    select, input {{ width: 100%; box-sizing: border-box; padding: 10px; border-radius: 6px; border: 1px solid #b7bbb2; font-size: 14px; }}
+    button {{ padding: 9px 12px; border: 1px solid #1e2328; border-radius: 6px; background: #1e2328; color: #ffffff; cursor: pointer; }}
+    button.secondary {{ background: #ffffff; color: #1e2328; }}
     .selected {{ display: grid; grid-template-columns: 160px 1fr; gap: 18px; margin-top: 16px; }}
     img {{ width: 100%; max-width: 160px; border-radius: 8px; }}
     table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
@@ -478,6 +510,14 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
     th {{ color: #667078; font-size: 12px; text-transform: uppercase; }}
     .cards {{ display: grid; gap: 10px; }}
     .card-row {{ padding: 12px; display: grid; grid-template-columns: 1fr auto; gap: 8px; }}
+    .owned-list {{ display: grid; gap: 8px; max-height: 520px; overflow: auto; }}
+    .owned-card {{ width: 100%; text-align: left; padding: 10px; background: #ffffff; color: #1e2328; }}
+    .owned-card.active {{ border-color: #1e2328; box-shadow: inset 3px 0 0 #1e2328; }}
+    .toolbar {{ display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }}
+    .search-results {{ display: grid; gap: 10px; margin-top: 12px; }}
+    .search-card {{ display: grid; grid-template-columns: 52px 1fr auto; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid #e6e6e1; }}
+    .search-card img {{ max-width: 52px; }}
+    .empty {{ color: #667078; padding: 10px 0; }}
     .muted {{ color: #667078; }}
     @media (max-width: 780px) {{
       main, header {{ padding-left: 16px; padding-right: 16px; }}
@@ -493,14 +533,22 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
   <main>
     <section class="grid">
       <div class="panel">
-        <div class="label">Select Card</div>
-        <select id="cardSelect"></select>
+        <div class="label">Owned Cards</div>
+        <div id="ownedList" class="owned-list"></div>
         <div id="selectedCard" class="selected"></div>
       </div>
       <div class="panel">
         <h2>Owned Variants</h2>
         <div id="variantTable"></div>
       </div>
+    </section>
+    <section class="panel">
+      <h2>Add Cards</h2>
+      <div class="toolbar">
+        <input id="catalogSearch" type="search" placeholder="Search by card name, set, rarity, or card id">
+        <button class="secondary" id="exportPortfolio">Export portfolio CSV</button>
+      </div>
+      <div id="searchResults" class="search-results"></div>
     </section>
     <section class="panel">
       <h2>Cards You Might Like</h2>
@@ -513,50 +561,94 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
   </main>
   <script>
     const data = {data};
+    const portfolioColumns = [
+      "holding_id", "item_type", "card_id", "tcg_price_type", "market_segment", "condition",
+      "grading_company", "grade", "product_name", "image_url", "copies_owned",
+      "purchase_price_each", "estimated_unit_value", "acquired_date", "notes"
+    ];
+    let workingHoldings = data.holdings.map(item => ({{ ...item }}));
+    let selectedCardId = "";
     const money = value => Number(value || 0).toLocaleString(
       undefined, {{ style: "currency", currency: "USD" }}
     );
 
+    function summarize(holdings) {{
+      const totalFor = (itemType, segment) => holdings
+        .filter(item => item.item_type === itemType && item.market_segment === segment)
+        .reduce((sum, item) => sum + Number(item.total_estimated_value || 0), 0);
+      const raw = totalFor("card", "raw");
+      const graded = totalFor("card", "graded");
+      const sealed = totalFor("sealed", "sealed");
+      return {{ raw_value: raw, graded_value: graded, sealed_value: sealed, portfolio_value: raw + graded + sealed }};
+    }}
+
+    function cardSummaries() {{
+      const groups = new Map();
+      workingHoldings.filter(item => item.item_type === "card").forEach(item => {{
+        const existing = groups.get(item.card_id) || {{
+          card_id: item.card_id,
+          name: item.name || item.product_name || item.card_id,
+          set_name: item.set_name || "",
+          image_url: item.image_url || "",
+          copies_owned: 0,
+          total_estimated_value: 0
+        }};
+        existing.copies_owned += Number(item.copies_owned || 0);
+        existing.total_estimated_value += Number(item.total_estimated_value || 0);
+        if (!existing.image_url && item.image_url) existing.image_url = item.image_url;
+        groups.set(item.card_id, existing);
+      }});
+      return Array.from(groups.values()).sort((a, b) => b.total_estimated_value - a.total_estimated_value);
+    }}
+
     function renderStats() {{
+      const summary = summarize(workingHoldings);
       const stats = [
-        ["Portfolio", data.summary.portfolio_value],
-        ["Raw Cards", data.summary.raw_value],
-        ["Graded Cards", data.summary.graded_value],
-        ["Sealed", data.summary.sealed_value],
+        ["Portfolio", summary.portfolio_value],
+        ["Raw Cards", summary.raw_value],
+        ["Graded Cards", summary.graded_value],
+        ["Sealed", summary.sealed_value],
       ];
       document.getElementById("stats").innerHTML = stats.map(([label, value]) => `
         <div class="stat"><div class="label">${{label}}</div><div class="value">${{money(value)}}</div></div>
       `).join("");
     }}
 
-    function renderSelect() {{
-      const select = document.getElementById("cardSelect");
-      select.innerHTML = `<option value="">Portfolio Summary</option>` + data.cards.map(card => `
-        <option value="${{card.card_id}}">${{card.name}} - ${{money(card.total_estimated_value)}}</option>
-      `).join("");
-      select.addEventListener("change", () => renderSelected(select.value));
-      renderSelected("");
+    function renderOwnedList() {{
+      const cards = cardSummaries();
+      document.getElementById("ownedList").innerHTML = cards.map(card => `
+        <button class="owned-card ${{card.card_id === selectedCardId ? "active" : ""}}" data-card-id="${{card.card_id}}">
+          <strong>${{card.name}}</strong>
+          <div class="muted">${{card.set_name || "Unknown set"}} - ${{Number(card.copies_owned || 0)}} copies - ${{money(card.total_estimated_value)}}</div>
+        </button>
+      `).join("") || `<div class="empty">No card holdings yet. Search below to add one.</div>`;
+      document.querySelectorAll(".owned-card").forEach(button => {{
+        button.addEventListener("click", () => renderSelected(button.dataset.cardId));
+      }});
     }}
 
     function renderSelected(cardId) {{
+      selectedCardId = cardId || "";
+      renderOwnedList();
       if (!cardId) {{
+        const summary = summarize(workingHoldings);
         document.getElementById("selectedCard").innerHTML = `
           <div>
             <h2>Portfolio Summary</h2>
             <p class="muted">Select a card to inspect owned variants.</p>
-            <p><strong>${{money(data.summary.portfolio_value)}} total estimated value</strong></p>
+            <p><strong>${{money(summary.portfolio_value)}} total estimated value</strong></p>
           </div>
         `;
-        renderVariants(data.holdings);
+        renderVariants(workingHoldings);
         return;
       }}
-      const card = data.cards.find(item => item.card_id === cardId);
-      const holdings = data.holdings.filter(item => item.card_id === cardId);
+      const card = cardSummaries().find(item => item.card_id === cardId);
+      const holdings = workingHoldings.filter(item => item.card_id === cardId);
       document.getElementById("selectedCard").innerHTML = card ? `
         <img src="${{card.image_url || ""}}" alt="${{card.name || "Card image"}}">
         <div>
           <h2>${{card.name}}</h2>
-          <p class="muted">${{card.card_id}}</p>
+          <p class="muted">${{card.set_name || "Unknown set"}} - ${{card.card_id}}</p>
           <p><strong>${{Number(card.copies_owned || 0)}} copies</strong></p>
           <p><strong>${{money(card.total_estimated_value)}} total estimated value</strong></p>
         </div>
@@ -567,6 +659,8 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
     function renderVariants(holdings) {{
       const rows = holdings.map(item => `
         <tr>
+          <td>${{item.name || item.product_name || ""}}</td>
+          <td>${{item.set_name || ""}}</td>
           <td>${{item.market_segment}}</td>
           <td>${{item.condition || item.grading_company + " " + item.grade}}</td>
           <td>${{Number(item.copies_owned || 0)}}</td>
@@ -577,10 +671,86 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
       `).join("");
       document.getElementById("variantTable").innerHTML = `
         <table>
-          <thead><tr><th>Type</th><th>Variant</th><th>Copies</th><th>Each</th><th>Total</th><th>Price Read</th></tr></thead>
+          <thead><tr><th>Name</th><th>Set</th><th>Type</th><th>Variant</th><th>Copies</th><th>Each</th><th>Total</th><th>Price Read</th></tr></thead>
           <tbody>${{rows}}</tbody>
         </table>
       `;
+    }}
+
+    function variantLabel(item) {{
+      return item.market_segment === "graded"
+        ? `${{item.grading_company || ""}} ${{item.grade || ""}}`.trim()
+        : item.condition || "raw";
+    }}
+
+    function renderSearch() {{
+      const term = document.getElementById("catalogSearch").value.toLowerCase().trim();
+      const results = data.catalog.filter(item => {{
+        const haystack = [item.card_id, item.name, item.set_name, item.rarity, item.pricing_label]
+          .join(" ").toLowerCase();
+        return !term || haystack.includes(term);
+      }}).slice(0, 25);
+      document.getElementById("searchResults").innerHTML = results.map((item, index) => `
+        <div class="search-card">
+          <img src="${{item.image_large || ""}}" alt="${{item.name || "Card image"}}">
+          <div>
+            <strong>${{item.name}}</strong>
+            <div class="muted">${{item.set_name || ""}} - ${{item.rarity || ""}} - ${{variantLabel(item)}} - ${{money(item.modeled_fair_price || item.observed_price)}}</div>
+          </div>
+          <button data-index="${{index}}">Add</button>
+        </div>
+      `).join("") || `<div class="empty">No matching cards found.</div>`;
+      document.querySelectorAll("#searchResults button").forEach(button => {{
+        button.addEventListener("click", () => addCatalogItem(results[Number(button.dataset.index)]));
+      }});
+    }}
+
+    function addCatalogItem(item) {{
+      const copies = 1;
+      const unitValue = Number(item.modeled_fair_price || item.observed_price || 0);
+      workingHoldings.push({{
+        holding_id: `web-${{Date.now()}}`,
+        item_type: "card",
+        card_id: item.card_id,
+        name: item.name,
+        set_name: item.set_name,
+        rarity: item.rarity,
+        product_name: item.name,
+        image_url: item.image_large || "",
+        tcg_price_type: item.tcg_price_type || "",
+        market_segment: item.market_segment || "raw",
+        condition: item.condition || "",
+        grading_company: item.grading_company || "",
+        grade: item.grade || 0,
+        copies_owned: copies,
+        purchase_price_each: "",
+        estimated_unit_value: unitValue,
+        total_estimated_value: unitValue * copies,
+        acquired_date: "",
+        notes: "Added from dashboard",
+        pricing_label: item.pricing_label || "",
+        source_name: "dashboard"
+      }});
+      renderStats();
+      renderSelected(item.card_id);
+    }}
+
+    function csvEscape(value) {{
+      const text = String(value ?? "");
+      return /[",\\n]/.test(text) ? `"${{text.replaceAll('"', '""')}}"` : text;
+    }}
+
+    function exportPortfolioCsv() {{
+      const rows = [portfolioColumns.join(",")].concat(workingHoldings.map(item =>
+        portfolioColumns.map(column => csvEscape(item[column])).join(",")
+      ));
+      const blob = new Blob([rows.join("\\n")], {{ type: "text/csv" }});
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "portfolio.csv";
+      link.click();
+      URL.revokeObjectURL(url);
     }}
 
     function renderRecommendations() {{
@@ -603,9 +773,13 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
     }}
 
     renderStats();
-    renderSelect();
+    renderOwnedList();
+    renderSelected("");
     renderRecommendations();
     renderHistory();
+    renderSearch();
+    document.getElementById("catalogSearch").addEventListener("input", renderSearch);
+    document.getElementById("exportPortfolio").addEventListener("click", exportPortfolioCsv);
   </script>
 </body>
 </html>

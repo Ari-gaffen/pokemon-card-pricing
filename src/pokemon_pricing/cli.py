@@ -117,7 +117,12 @@ def main() -> None:
         wishlist_path = args.wishlist or Path("portfolio/wishlist.csv")
         valued = value_portfolio(args.scored_cards, portfolio_path)
         recommendations = recommend_cards(args.scored_cards, portfolio_path, wishlist_path)
-        output = build_dashboard(valued, recommendations, output_path=args.output)
+        catalog = None
+        if args.scored_cards.exists():
+            import pandas as pd
+
+            catalog = pd.read_csv(args.scored_cards)
+        output = build_dashboard(valued, recommendations, catalog=catalog, output_path=args.output)
         print(f"Saved portfolio dashboard to {output}")
         return
 
