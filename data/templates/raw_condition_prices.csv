@@ -1,0 +1,4 @@
+card_id,tcg_price_type,market_segment,condition,grading_company,grade,observed_price,source_name,recent_sold_count,population_count,sold_window_days,as_of_date
+base1-4,holofoil,raw,near_mint,raw,0,399.99,ebay_sold,18,,90,2026-05-02
+base1-4,holofoil,raw,lightly_played,raw,0,299.99,ebay_sold,22,,90,2026-05-02
+base1-4,holofoil,raw,moderately_played,raw,0,224.99,ebay_sold,14,,90,2026-05-02

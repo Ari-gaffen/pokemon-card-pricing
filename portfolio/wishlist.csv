@@ -1,0 +1,2 @@
+wishlist_id,item_type,card_id,tcg_price_type,market_segment,condition,grading_company,grade,product_name,target_price,priority,notes
+w001,card,base1-2,holofoil,raw,near_mint,raw,0,,,high,Example wishlist card. Replace or delete this row.

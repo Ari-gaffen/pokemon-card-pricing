@@ -1,0 +1,4 @@
+holding_id,item_type,card_id,tcg_price_type,market_segment,condition,grading_company,grade,product_name,image_url,copies_owned,purchase_price_each,estimated_unit_value,acquired_date,notes
+h001,card,base1-4,holofoil,raw,near_mint,raw,0,,,1,,,,Example raw card. Replace or delete this row.
+h002,card,base1-4,holofoil,graded,,psa,9,,,1,,,,Example graded card. Replace or delete this row.
+s001,sealed,,,sealed,sealed,,,Example Booster Box,,1,,120.0,,Sealed products use estimated_unit_value until a sealed API is added.

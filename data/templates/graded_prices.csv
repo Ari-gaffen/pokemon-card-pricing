@@ -1,0 +1,4 @@
+card_id,tcg_price_type,market_segment,condition,grading_company,grade,observed_price,source_name,recent_sold_count,population_count,sold_window_days,as_of_date
+base1-4,holofoil,graded,,psa,8,650.00,pricecharting,11,20000,90,2026-05-02
+base1-4,holofoil,graded,,psa,9,1450.00,pricecharting,8,7500,90,2026-05-02
+base1-4,holofoil,graded,,psa,10,125000.00,pricecharting,2,125,90,2026-05-02
