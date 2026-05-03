@@ -20,7 +20,7 @@ def series_query(series: str) -> str:
 
 def fetch_pokemon_tcg_cards(
     query: str | None,
-    max_pages: int,
+    max_pages: int | None,
     page_size: int = 250,
     output_path: Path = RAW_DIR / "cards.jsonl",
 ) -> Path:
@@ -37,7 +37,8 @@ def fetch_pokemon_tcg_cards(
     total_cards = 0
 
     with temp_path.open("w", encoding="utf-8") as handle:
-        for page in range(1, max_pages + 1):
+        page = 1
+        while max_pages is None or page <= max_pages:
             params: dict[str, Any] = {"page": page, "pageSize": page_size}
             if query:
                 params["q"] = query
@@ -59,6 +60,7 @@ def fetch_pokemon_tcg_cards(
             if len(cards) < page_size:
                 break
 
+            page += 1
             time.sleep(0.25)
 
     if total_cards == 0:

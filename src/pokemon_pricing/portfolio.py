@@ -267,6 +267,7 @@ def build_dashboard(
         "holdings": valued.fillna("").to_dict(orient="records"),
         "recommendations": recommendations.fillna("").to_dict(orient="records"),
         "catalog": _catalog_records(catalog),
+        "character_premiums": _character_premium_records(catalog),
         "history": history.fillna("").to_dict(orient="records"),
     }
     html = _dashboard_html(payload)
@@ -463,6 +464,12 @@ def _catalog_records(catalog: pd.DataFrame | None) -> list[dict[str, Any]]:
         "name",
         "set_name",
         "rarity",
+        "character",
+        "set_series",
+        "set_rarity_price_rank",
+        "character_print_count",
+        "character_avg_set_rarity_price_rank",
+        "image_small",
         "image_large",
         "tcg_price_type",
         "market_segment",
@@ -476,6 +483,72 @@ def _catalog_records(catalog: pd.DataFrame | None) -> list[dict[str, Any]]:
     available = [column for column in columns if column in catalog.columns]
     records = catalog[available].copy()
     return records.fillna("").to_dict(orient="records")
+
+
+def _character_premium_records(catalog: pd.DataFrame | None) -> list[dict[str, Any]]:
+    if catalog is None or catalog.empty or "character" not in catalog.columns:
+        return []
+
+    frame = catalog.copy()
+    if "image_small" not in frame.columns:
+        frame["image_small"] = frame.get("image_large", "")
+    if "set_id" not in frame.columns:
+        frame["set_id"] = frame.get("set_name", "")
+    if "rarity" not in frame.columns:
+        frame["rarity"] = ""
+    price_column = "modeled_fair_price" if "modeled_fair_price" in frame.columns else "observed_price"
+    frame[price_column] = pd.to_numeric(frame.get(price_column), errors="coerce")
+    if "set_rarity_price_rank" not in frame.columns:
+        frame["set_rarity_price_rank"] = frame.groupby(["set_id", "rarity"])[price_column].rank(
+            method="average", ascending=False
+        )
+    else:
+        frame["set_rarity_price_rank"] = pd.to_numeric(
+            frame["set_rarity_price_rank"], errors="coerce"
+        )
+
+    grouped = (
+        frame.dropna(subset=["character"])
+        .groupby("character", dropna=False)
+        .agg(
+            avg_set_rarity_price_rank=("set_rarity_price_rank", "mean"),
+            print_count=("card_id", "nunique"),
+            image_url=("image_small", "first"),
+        )
+        .reset_index()
+    )
+    if grouped.empty:
+        return []
+
+    grouped["rank_signal"] = 1 / grouped["avg_set_rarity_price_rank"].clip(lower=0.01)
+    grouped["print_signal"] = grouped["print_count"].rank(method="average", pct=True)
+    grouped["premium_raw"] = grouped["rank_signal"] * (1 + grouped["print_signal"])
+    grouped["print_count_weighted_rank"] = grouped["premium_raw"].rank(
+        method="dense", ascending=False
+    )
+    min_raw = grouped["premium_raw"].min()
+    max_raw = grouped["premium_raw"].max()
+    if max_raw == min_raw:
+        grouped["normalized_score"] = 10.0
+    else:
+        grouped["normalized_score"] = 1 + 9 * (
+            (grouped["premium_raw"] - min_raw) / (max_raw - min_raw)
+        )
+
+    grouped = grouped.sort_values(["print_count_weighted_rank", "character"]).head(50)
+    grouped["print_count_weighted_rank"] = grouped["print_count_weighted_rank"].astype(int)
+    grouped["normalized_score"] = grouped["normalized_score"].round(1)
+    grouped["avg_set_rarity_price_rank"] = grouped["avg_set_rarity_price_rank"].round(1)
+    return grouped[
+        [
+            "character",
+            "image_url",
+            "print_count_weighted_rank",
+            "normalized_score",
+            "avg_set_rarity_price_rank",
+            "print_count",
+        ]
+    ].fillna("").to_dict(orient="records")
 
 
 def _dashboard_html(payload: dict[str, Any]) -> str:
@@ -493,6 +566,7 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
     header {{ padding: 24px 32px 12px; background: #ffffff; border-bottom: 1px solid #ddded8; }}
     h1 {{ margin: 0 0 16px; font-size: 28px; letter-spacing: 0; }}
     main {{ padding: 24px 32px 40px; display: grid; gap: 24px; }}
+    nav {{ display: flex; gap: 8px; flex-wrap: wrap; }}
     .stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }}
     .stat, .panel, .card-row, .owned-card {{ background: #ffffff; border: 1px solid #ddded8; border-radius: 8px; }}
     .stat {{ padding: 14px; }}
@@ -503,6 +577,11 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
     select, input {{ width: 100%; box-sizing: border-box; padding: 10px; border-radius: 6px; border: 1px solid #b7bbb2; font-size: 14px; }}
     button {{ padding: 9px 12px; border: 1px solid #1e2328; border-radius: 6px; background: #1e2328; color: #ffffff; cursor: pointer; }}
     button.secondary {{ background: #ffffff; color: #1e2328; }}
+    button.danger {{ background: #8d2430; border-color: #8d2430; }}
+    button.tab-button {{ background: #ffffff; color: #1e2328; }}
+    button.tab-button.active {{ background: #1e2328; color: #ffffff; }}
+    .tab-section {{ display: none; }}
+    .tab-section.active {{ display: grid; gap: 24px; }}
     .selected {{ display: grid; grid-template-columns: 160px 1fr; gap: 18px; margin-top: 16px; }}
     img {{ width: 100%; max-width: 160px; border-radius: 8px; }}
     table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
@@ -511,17 +590,25 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
     .cards {{ display: grid; gap: 10px; }}
     .card-row {{ padding: 12px; display: grid; grid-template-columns: 1fr auto; gap: 8px; }}
     .owned-list {{ display: grid; gap: 8px; max-height: 520px; overflow: auto; }}
-    .owned-card {{ width: 100%; text-align: left; padding: 10px; background: #ffffff; color: #1e2328; }}
+    .owned-card {{ width: 100%; text-align: left; padding: 10px; background: #ffffff; color: #1e2328; display: grid; grid-template-columns: 44px 1fr; gap: 10px; align-items: center; }}
+    .owned-card img {{ max-width: 44px; }}
     .owned-card.active {{ border-color: #1e2328; box-shadow: inset 3px 0 0 #1e2328; }}
     .toolbar {{ display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }}
     .search-results {{ display: grid; gap: 10px; margin-top: 12px; }}
     .search-card {{ display: grid; grid-template-columns: 52px 1fr auto; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid #e6e6e1; }}
     .search-card img {{ max-width: 52px; }}
     .empty {{ color: #667078; padding: 10px 0; }}
+    .premium-grid {{ display: grid; grid-template-columns: repeat(2, minmax(280px, 1fr)); gap: 28px; }}
+    .premium-row {{ display: grid; grid-template-columns: 48px 1fr 70px 80px 90px 70px; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid #e6e6e1; }}
+    .premium-row img {{ max-width: 42px; }}
+    .premium-head {{ color: #667078; font-size: 12px; font-weight: 700; text-transform: uppercase; }}
     .muted {{ color: #667078; }}
     @media (max-width: 780px) {{
       main, header {{ padding-left: 16px; padding-right: 16px; }}
       .grid, .selected {{ grid-template-columns: 1fr; }}
+      .premium-grid {{ grid-template-columns: 1fr; }}
+      .premium-row {{ grid-template-columns: 42px 1fr; }}
+      .premium-head {{ display: none; }}
     }}
   </style>
 </head>
@@ -529,34 +616,51 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
   <header>
     <h1>{escape(title)}</h1>
     <div class="stats" id="stats"></div>
+    <nav>
+      <button class="tab-button active" data-tab="portfolio">Portfolio</button>
+      <button class="tab-button" data-tab="add">Add Cards</button>
+      <button class="tab-button" data-tab="premium">Character Premium</button>
+    </nav>
   </header>
   <main>
-    <section class="grid">
-      <div class="panel">
-        <div class="label">Owned Cards</div>
-        <div id="ownedList" class="owned-list"></div>
-        <div id="selectedCard" class="selected"></div>
+    <section id="tab-portfolio" class="tab-section active">
+      <div class="grid">
+        <div class="panel">
+          <div class="label">Owned Cards</div>
+          <div id="ownedList" class="owned-list"></div>
+          <div id="selectedCard" class="selected"></div>
+        </div>
+        <div class="panel">
+          <h2>Owned Variants</h2>
+          <div class="muted">Edit copies or manual value, remove rows, then export the portfolio CSV.</div>
+          <div id="variantTable"></div>
+        </div>
       </div>
       <div class="panel">
-        <h2>Owned Variants</h2>
-        <div id="variantTable"></div>
+        <h2>Cards You Might Like</h2>
+        <div id="recommendations" class="cards"></div>
+      </div>
+      <div class="panel">
+        <h2>Portfolio Value Over Time</h2>
+        <div id="history"></div>
       </div>
     </section>
-    <section class="panel">
-      <h2>Add Cards</h2>
-      <div class="toolbar">
-        <input id="catalogSearch" type="search" placeholder="Search by card name, set, rarity, or card id">
-        <button class="secondary" id="exportPortfolio">Export portfolio CSV</button>
+    <section id="tab-add" class="tab-section">
+      <div class="panel">
+        <h2>Add Cards</h2>
+        <div class="toolbar">
+          <input id="catalogSearch" type="search" placeholder="Search by card name, set, rarity, or card id">
+          <button class="secondary" id="exportPortfolio">Export portfolio CSV</button>
+        </div>
+        <div id="searchResults" class="search-results"></div>
       </div>
-      <div id="searchResults" class="search-results"></div>
     </section>
-    <section class="panel">
-      <h2>Cards You Might Like</h2>
-      <div id="recommendations" class="cards"></div>
-    </section>
-    <section class="panel">
-      <h2>Portfolio Value Over Time</h2>
-      <div id="history"></div>
+    <section id="tab-premium" class="tab-section">
+      <div class="panel">
+        <h2>Character Premium</h2>
+        <div class="muted">Desirability index from print count and average set-rarity price rank.</div>
+        <div id="characterPremium"></div>
+      </div>
     </section>
   </main>
   <script>
@@ -618,8 +722,11 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
       const cards = cardSummaries();
       document.getElementById("ownedList").innerHTML = cards.map(card => `
         <button class="owned-card ${{card.card_id === selectedCardId ? "active" : ""}}" data-card-id="${{card.card_id}}">
-          <strong>${{card.name}}</strong>
-          <div class="muted">${{card.set_name || "Unknown set"}} - ${{Number(card.copies_owned || 0)}} copies - ${{money(card.total_estimated_value)}}</div>
+          <img src="${{card.image_url || ""}}" alt="${{card.name || "Card image"}}">
+          <span>
+            <strong>${{card.name}}</strong>
+            <div class="muted">${{card.set_name || "Unknown set"}} - ${{Number(card.copies_owned || 0)}} copies - ${{money(card.total_estimated_value)}}</div>
+          </span>
         </button>
       `).join("") || `<div class="empty">No card holdings yet. Search below to add one.</div>`;
       document.querySelectorAll(".owned-card").forEach(button => {{
@@ -659,22 +766,48 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
     function renderVariants(holdings) {{
       const rows = holdings.map(item => `
         <tr>
+          <td><img src="${{item.image_url || ""}}" alt="${{item.name || item.product_name || "Item image"}}" style="max-width:42px"></td>
           <td>${{item.name || item.product_name || ""}}</td>
           <td>${{item.set_name || ""}}</td>
           <td>${{item.market_segment}}</td>
           <td>${{item.condition || item.grading_company + " " + item.grade}}</td>
-          <td>${{Number(item.copies_owned || 0)}}</td>
-          <td>${{money(item.estimated_unit_value)}}</td>
+          <td><input type="number" min="0" step="1" value="${{Number(item.copies_owned || 0)}}" data-holding-id="${{item.holding_id}}" data-field="copies_owned"></td>
+          <td><input type="number" min="0" step="0.01" value="${{Number(item.estimated_unit_value || 0)}}" data-holding-id="${{item.holding_id}}" data-field="estimated_unit_value"></td>
           <td>${{money(item.total_estimated_value)}}</td>
           <td>${{item.pricing_label || ""}}</td>
+          <td><button class="danger" data-remove-id="${{item.holding_id}}">Remove</button></td>
         </tr>
       `).join("");
       document.getElementById("variantTable").innerHTML = `
         <table>
-          <thead><tr><th>Name</th><th>Set</th><th>Type</th><th>Variant</th><th>Copies</th><th>Each</th><th>Total</th><th>Price Read</th></tr></thead>
+          <thead><tr><th>Image</th><th>Name</th><th>Set</th><th>Type</th><th>Variant</th><th>Copies</th><th>Each</th><th>Total</th><th>Price Read</th><th></th></tr></thead>
           <tbody>${{rows}}</tbody>
         </table>
       `;
+      document.querySelectorAll("#variantTable input").forEach(input => {{
+        input.addEventListener("change", () => updateHolding(input.dataset.holdingId, input.dataset.field, input.value));
+      }});
+      document.querySelectorAll("#variantTable button[data-remove-id]").forEach(button => {{
+        button.addEventListener("click", () => removeHolding(button.dataset.removeId));
+      }});
+    }}
+
+    function updateHolding(holdingId, field, value) {{
+      const holding = workingHoldings.find(item => item.holding_id === holdingId);
+      if (!holding) return;
+      holding[field] = Number(value || 0);
+      holding.total_estimated_value = Number(holding.copies_owned || 0) * Number(holding.estimated_unit_value || 0);
+      renderStats();
+      renderSelected(selectedCardId);
+    }}
+
+    function removeHolding(holdingId) {{
+      const removed = workingHoldings.find(item => item.holding_id === holdingId);
+      workingHoldings = workingHoldings.filter(item => item.holding_id !== holdingId);
+      const stillHasSelected = selectedCardId && workingHoldings.some(item => item.card_id === selectedCardId);
+      renderStats();
+      renderSelected(stillHasSelected ? selectedCardId : "");
+      if (removed) renderSearch();
     }}
 
     function variantLabel(item) {{
@@ -735,6 +868,41 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
       renderSelected(item.card_id);
     }}
 
+    function renderCharacterPremium() {{
+      const premiums = data.character_premiums || [];
+      const columns = Math.ceil(premiums.length / 2);
+      const groups = [premiums.slice(0, columns), premiums.slice(columns)];
+      const block = rows => `
+        <div>
+          <div class="premium-row premium-head">
+            <span></span><span>Character</span><span>Rank</span><span>Score</span><span>Avg Price Rank</span><span>Prints</span>
+          </div>
+          ${{rows.map(item => `
+            <div class="premium-row">
+              <img src="${{item.image_url || ""}}" alt="${{item.character}}">
+              <strong>${{item.character}}</strong>
+              <span>${{item.print_count_weighted_rank}}</span>
+              <span>${{item.normalized_score}}</span>
+              <span>${{item.avg_set_rarity_price_rank}}</span>
+              <span>${{item.print_count}}</span>
+            </div>
+          `).join("")}}
+        </div>
+      `;
+      document.getElementById("characterPremium").innerHTML = premiums.length
+        ? `<div class="premium-grid">${{groups.map(block).join("")}}</div>`
+        : `<div class="empty">No character premium data yet. Score a larger card catalog first.</div>`;
+    }}
+
+    function showTab(tabName) {{
+      document.querySelectorAll(".tab-button").forEach(button => {{
+        button.classList.toggle("active", button.dataset.tab === tabName);
+      }});
+      document.querySelectorAll(".tab-section").forEach(section => {{
+        section.classList.toggle("active", section.id === `tab-${{tabName}}`);
+      }});
+    }}
+
     function csvEscape(value) {{
       const text = String(value ?? "");
       return /[",\\n]/.test(text) ? `"${{text.replaceAll('"', '""')}}"` : text;
@@ -778,8 +946,12 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
     renderRecommendations();
     renderHistory();
     renderSearch();
+    renderCharacterPremium();
     document.getElementById("catalogSearch").addEventListener("input", renderSearch);
     document.getElementById("exportPortfolio").addEventListener("click", exportPortfolioCsv);
+    document.querySelectorAll(".tab-button").forEach(button => {{
+      button.addEventListener("click", () => showTab(button.dataset.tab));
+    }});
   </script>
 </body>
 </html>

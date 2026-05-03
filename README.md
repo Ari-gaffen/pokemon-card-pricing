@@ -141,6 +141,14 @@ Fetch cards:
 python -m pokemon_pricing fetch --series "Sword & Shield" --max-pages 2
 ```
 
+Fetch the full available Pokemon TCG API card catalog:
+
+```powershell
+python -m pokemon_pricing fetch --all
+```
+
+The full fetch can take a while because it pages through the API. A Pokemon TCG API key in `.env` is recommended for better rate limits.
+
 Train:
 
 ```powershell
@@ -213,6 +221,14 @@ python -m pokemon_pricing dashboard --scored-cards data/processed/scored_cards.c
 ```
 
 Open [data/processed/portfolio_dashboard.html](data/processed/portfolio_dashboard.html) in your browser. When no single card is selected, the top summary shows total estimated portfolio value split across raw cards, graded cards, and sealed product. When you select a card, it shows the variants owned, copies owned, picture, estimated value per variant, and total value for that card.
+
+Dashboard tabs:
+
+- `Portfolio`: owned cards, card images, editable copies, editable manual values, and remove buttons.
+- `Add Cards`: search the scored catalog and add cards to the in-browser portfolio state.
+- `Character Premium`: current demand-signal table using print count and average set-rarity price rank.
+
+Because the dashboard is a static HTML file, browser safety rules prevent it from silently overwriting `portfolio/portfolio.csv`. After adding, removing, or editing holdings, click `Export portfolio CSV` and replace [portfolio/portfolio.csv](portfolio/portfolio.csv) with the exported file.
 
 ## Suggested Next Steps
 

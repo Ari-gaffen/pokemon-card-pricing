@@ -1,12 +1,32 @@
 from pokemon_pricing.enrichment import append_price_variants, normalize_enrichment
 from pokemon_pricing.features import cards_to_frame
 from pokemon_pricing.portfolio import summarize_portfolio, value_portfolio
-from pokemon_pricing.data_sources import series_query
+from pokemon_pricing.data_sources import fetch_pokemon_tcg_cards, series_query
 import pandas as pd
 
 
 def test_series_query_quotes_series_names():
     assert series_query("Sword & Shield") == 'set.series:"Sword & Shield"'
+
+
+def test_fetch_accepts_unlimited_pages_signature(tmp_path, monkeypatch):
+    class Response:
+        text = "{}"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": []}
+
+    def fake_get(*args, **kwargs):
+        return Response()
+
+    monkeypatch.setattr("pokemon_pricing.data_sources.requests.get", fake_get)
+    try:
+        fetch_pokemon_tcg_cards(None, None, output_path=tmp_path / "cards.jsonl")
+    except RuntimeError as error:
+        assert "No cards were returned" in str(error)
 
 
 def test_character_premium_features_are_created():

@@ -23,6 +23,7 @@ def main() -> None:
     fetch_parser = subparsers.add_parser("fetch", help="Fetch card data")
     fetch_parser.add_argument("--query", default=None)
     fetch_parser.add_argument("--series", default=None)
+    fetch_parser.add_argument("--all", action="store_true", help="Fetch every matching API page")
     fetch_parser.add_argument("--max-pages", type=int, default=1)
     fetch_parser.add_argument("--output", type=Path, default=RAW_DIR / "cards.jsonl")
 
@@ -76,7 +77,8 @@ def main() -> None:
         if args.query and args.series:
             raise ValueError("Use either --query or --series, not both.")
         query = series_query(args.series) if args.series else args.query
-        output = fetch_pokemon_tcg_cards(query, args.max_pages, output_path=args.output)
+        max_pages = None if args.all else args.max_pages
+        output = fetch_pokemon_tcg_cards(query, max_pages, output_path=args.output)
         print(f"Saved cards to {output}")
         return
 
