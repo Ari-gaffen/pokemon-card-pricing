@@ -123,8 +123,13 @@ def main() -> None:
         if args.scored_cards.exists():
             import pandas as pd
 
-            catalog = pd.read_csv(args.scored_cards)
-        output = build_dashboard(valued, recommendations, catalog=catalog, output_path=args.output)
+            catalog = pd.read_csv(args.scored_cards, low_memory=False)
+            wishlist = pd.read_csv(wishlist_path) if wishlist_path.exists() else None
+        else:
+            wishlist = None
+        output = build_dashboard(
+            valued, recommendations, catalog=catalog, wishlist=wishlist, output_path=args.output
+        )
         print(f"Saved portfolio dashboard to {output}")
         return
 

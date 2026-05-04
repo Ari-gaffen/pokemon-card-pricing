@@ -225,10 +225,22 @@ Open [data/processed/portfolio_dashboard.html](data/processed/portfolio_dashboar
 Dashboard tabs:
 
 - `Portfolio`: owned cards, card images, editable copies, editable manual values, and remove buttons.
-- `Add Cards`: search the scored catalog and add cards to the in-browser portfolio state.
-- `Character Premium`: current demand-signal table using print count and average set-rarity price rank.
+- `Add Cards`: search the scored catalog, choose Portfolio or Wishlist, choose English or Japanese, choose a variant such as `RAW - NM` or `PSA 10`, and add it to the in-browser state.
+- `Wishlist`: track cards you want without adding them to portfolio totals.
+- `Character Premium`: current demand-signal table using only Pokemon species cards, print count, and average set-rarity price rank.
 
 Because the dashboard is a static HTML file, browser safety rules prevent it from silently overwriting `portfolio/portfolio.csv`. After adding, removing, or editing holdings, click `Export portfolio CSV` and replace [portfolio/portfolio.csv](portfolio/portfolio.csv) with the exported file.
+
+Japanese cards are supported as a portfolio/wishlist language selection. Pricing still depends on the source data you provide: the default Pokemon TCG API flow primarily covers English-market data, so Japanese-specific values should be added through enrichment CSVs when you have that source.
+
+Character Premium score calculation:
+
+1. Keep only rows where `supertype` is `Pokemon` and `national_pokedex_number` is between 1 and 1025.
+2. Roll special card names up to the species by Pokedex number, so cards like `Pikachu with Grey Felt Hat` become `Pikachu`.
+3. Rank each card by evaluated price within its set and rarity group.
+4. Average those set-rarity price ranks by species.
+5. Combine inverse average rank with print-count percentile.
+6. Normalize the resulting desirability score to a 1.0-10.0 scale.
 
 ## Suggested Next Steps
 

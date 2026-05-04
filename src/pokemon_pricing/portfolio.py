@@ -14,6 +14,7 @@ PORTFOLIO_COLUMNS = [
     "holding_id",
     "item_type",
     "card_id",
+    "language",
     "tcg_price_type",
     "market_segment",
     "condition",
@@ -32,6 +33,7 @@ WISHLIST_COLUMNS = [
     "wishlist_id",
     "item_type",
     "card_id",
+    "language",
     "tcg_price_type",
     "market_segment",
     "condition",
@@ -52,6 +54,7 @@ VALUE_COLUMNS = [
     "rarity",
     "product_name",
     "image_url",
+    "language",
     "tcg_price_type",
     "market_segment",
     "condition",
@@ -59,6 +62,7 @@ VALUE_COLUMNS = [
     "grade",
     "copies_owned",
     "estimated_unit_value",
+    "modeled_fair_price",
     "total_estimated_value",
     "pricing_label",
     "source_name",
@@ -100,7 +104,7 @@ def value_portfolio(
     if portfolio.empty:
         return pd.DataFrame(columns=VALUE_COLUMNS)
 
-    scored = pd.read_csv(scored_cards_path)
+    scored = pd.read_csv(scored_cards_path, low_memory=False)
     portfolio = _normalize_portfolio(portfolio)
     scored = _normalize_variants(scored)
 
@@ -136,6 +140,7 @@ def value_portfolio(
             card_values["image_url"] = card_values["image_url"].fillna(card_values["image_large"])
         if "image_small" in card_values.columns:
             card_values["image_url"] = card_values["image_url"].fillna(card_values["image_small"])
+        card_values["language"] = card_values["language"].fillna("English")
         valued_frames.append(card_values)
 
     if not sealed_holdings.empty:
@@ -153,6 +158,9 @@ def value_portfolio(
     valued["total_estimated_value"] = valued["copies_owned"] * valued["estimated_unit_value"]
     valued["product_name"] = valued["product_name"].fillna(valued["name"])
     valued["image_url"] = valued["image_url"].fillna("")
+    if "modeled_fair_price" not in valued.columns:
+        valued["modeled_fair_price"] = None
+    valued["modeled_fair_price"] = pd.to_numeric(valued["modeled_fair_price"], errors="coerce")
     return valued.reindex(columns=VALUE_COLUMNS)
 
 
@@ -212,7 +220,7 @@ def recommend_cards(
     wishlist_path: Path = PORTFOLIO_DIR / "wishlist.csv",
     limit: int = 20,
 ) -> pd.DataFrame:
-    scored = _normalize_variants(pd.read_csv(scored_cards_path))
+    scored = _normalize_variants(pd.read_csv(scored_cards_path, low_memory=False))
     portfolio = _normalize_portfolio(_read_csv(portfolio_path, PORTFOLIO_COLUMNS))
     wishlist = _normalize_wishlist(_read_csv(wishlist_path, WISHLIST_COLUMNS))
 
@@ -235,6 +243,7 @@ def recommend_cards(
         "name",
         "set_name",
         "rarity",
+        "language",
         "tcg_price_type",
         "market_segment",
         "condition",
@@ -244,6 +253,7 @@ def recommend_cards(
         "observed_price",
         "pricing_label",
         "recommendation_score",
+        "image_small",
         "image_large",
     ]
     return candidates.sort_values("recommendation_score", ascending=False).head(limit)[columns]
@@ -253,6 +263,7 @@ def build_dashboard(
     valued: pd.DataFrame,
     recommendations: pd.DataFrame,
     catalog: pd.DataFrame | None = None,
+    wishlist: pd.DataFrame | None = None,
     history_path: Path = PORTFOLIO_DIR / "portfolio_value_history.csv",
     output_path: Path = PROCESSED_DIR / "portfolio_dashboard.html",
 ) -> Path:
@@ -265,6 +276,7 @@ def build_dashboard(
         "summary": summary,
         "cards": cards,
         "holdings": valued.fillna("").to_dict(orient="records"),
+        "wishlist": _wishlist_records(wishlist, catalog),
         "recommendations": recommendations.fillna("").to_dict(orient="records"),
         "catalog": _catalog_records(catalog),
         "character_premiums": _character_premium_records(catalog),
@@ -282,6 +294,7 @@ def _template_portfolio() -> pd.DataFrame:
                 "holding_id": "h001",
                 "item_type": "card",
                 "card_id": "base1-4",
+                "language": "English",
                 "tcg_price_type": "holofoil",
                 "market_segment": "raw",
                 "condition": "near_mint",
@@ -299,6 +312,7 @@ def _template_portfolio() -> pd.DataFrame:
                 "holding_id": "h002",
                 "item_type": "card",
                 "card_id": "base1-4",
+                "language": "English",
                 "tcg_price_type": "holofoil",
                 "market_segment": "graded",
                 "condition": "",
@@ -316,6 +330,7 @@ def _template_portfolio() -> pd.DataFrame:
                 "holding_id": "s001",
                 "item_type": "sealed",
                 "card_id": "",
+                "language": "English",
                 "tcg_price_type": "",
                 "market_segment": "sealed",
                 "condition": "sealed",
@@ -341,6 +356,7 @@ def _template_wishlist() -> pd.DataFrame:
                 "wishlist_id": "w001",
                 "item_type": "card",
                 "card_id": "base1-2",
+                "language": "English",
                 "tcg_price_type": "holofoil",
                 "market_segment": "raw",
                 "condition": "near_mint",
@@ -368,6 +384,7 @@ def _normalize_portfolio(portfolio: pd.DataFrame) -> pd.DataFrame:
         if column not in normalized.columns:
             normalized[column] = None
     normalized["item_type"] = normalized["item_type"].fillna("").str.lower().str.strip()
+    normalized["language"] = normalized["language"].fillna("English").str.strip()
     normalized["market_segment"] = normalized["market_segment"].fillna("").str.lower().str.strip()
     normalized["condition"] = normalized["condition"].fillna("").str.lower().str.strip()
     normalized["grading_company"] = (
@@ -389,6 +406,7 @@ def _normalize_wishlist(wishlist: pd.DataFrame) -> pd.DataFrame:
         if column not in normalized.columns:
             normalized[column] = None
     normalized["item_type"] = normalized["item_type"].fillna("").str.lower().str.strip()
+    normalized["language"] = normalized["language"].fillna("English").str.strip()
     return normalized[WISHLIST_COLUMNS]
 
 
@@ -398,6 +416,7 @@ def _normalize_variants(scored: pd.DataFrame) -> pd.DataFrame:
         if column not in normalized.columns:
             normalized[column] = None
     normalized["market_segment"] = normalized["market_segment"].fillna("").str.lower().str.strip()
+    normalized["language"] = normalized["language"].fillna("English").str.strip()
     normalized["condition"] = normalized["condition"].fillna("").str.lower().str.strip()
     normalized["grading_company"] = (
         normalized["grading_company"].fillna("").str.lower().str.strip()
@@ -465,6 +484,9 @@ def _catalog_records(catalog: pd.DataFrame | None) -> list[dict[str, Any]]:
         "set_name",
         "rarity",
         "character",
+        "supertype",
+        "national_pokedex_number",
+        "set_id",
         "set_series",
         "set_rarity_price_rank",
         "character_print_count",
@@ -485,6 +507,34 @@ def _catalog_records(catalog: pd.DataFrame | None) -> list[dict[str, Any]]:
     return records.fillna("").to_dict(orient="records")
 
 
+def _wishlist_records(
+    wishlist: pd.DataFrame | None, catalog: pd.DataFrame | None
+) -> list[dict[str, Any]]:
+    if wishlist is None or wishlist.empty:
+        return []
+    normalized = _normalize_wishlist(wishlist)
+    if catalog is None or catalog.empty:
+        return normalized.fillna("").to_dict(orient="records")
+
+    scored = _normalize_variants(catalog)
+    columns = VARIANT_KEY_COLUMNS + [
+        "name",
+        "set_name",
+        "rarity",
+        "image_small",
+        "image_large",
+        "modeled_fair_price",
+        "observed_price",
+        "pricing_label",
+    ]
+    available = [column for column in columns if column in scored.columns]
+    merged = normalized.merge(scored[available], on=VARIANT_KEY_COLUMNS, how="left")
+    merged["image_url"] = merged.get("image_large", pd.Series(index=merged.index)).fillna(
+        merged.get("image_small", pd.Series(index=merged.index))
+    )
+    return merged.fillna("").to_dict(orient="records")
+
+
 def _character_premium_records(catalog: pd.DataFrame | None) -> list[dict[str, Any]]:
     if catalog is None or catalog.empty or "character" not in catalog.columns:
         return []
@@ -496,6 +546,21 @@ def _character_premium_records(catalog: pd.DataFrame | None) -> list[dict[str, A
         frame["set_id"] = frame.get("set_name", "")
     if "rarity" not in frame.columns:
         frame["rarity"] = ""
+    if "supertype" not in frame.columns:
+        frame["supertype"] = ""
+    if "national_pokedex_number" not in frame.columns:
+        frame["national_pokedex_number"] = None
+    frame["national_pokedex_number"] = pd.to_numeric(
+        frame["national_pokedex_number"], errors="coerce"
+    )
+    frame = frame[
+        (frame["supertype"] == "Pokémon")
+        & frame["national_pokedex_number"].between(1, 1025)
+    ].copy()
+    if frame.empty:
+        return []
+    frame["character"] = _canonical_species_from_catalog(frame)
+
     price_column = "modeled_fair_price" if "modeled_fair_price" in frame.columns else "observed_price"
     frame[price_column] = pd.to_numeric(frame.get(price_column), errors="coerce")
     if "set_rarity_price_rank" not in frame.columns:
@@ -506,6 +571,10 @@ def _character_premium_records(catalog: pd.DataFrame | None) -> list[dict[str, A
         frame["set_rarity_price_rank"] = pd.to_numeric(
             frame["set_rarity_price_rank"], errors="coerce"
         )
+        if frame["set_rarity_price_rank"].dropna().le(1).all():
+            frame["set_rarity_price_rank"] = frame.groupby(["set_id", "rarity"])[price_column].rank(
+                method="average", ascending=False
+            )
 
     grouped = (
         frame.dropna(subset=["character"])
@@ -551,6 +620,32 @@ def _character_premium_records(catalog: pd.DataFrame | None) -> list[dict[str, A
     ].fillna("").to_dict(orient="records")
 
 
+def _canonical_species_from_catalog(frame: pd.DataFrame) -> pd.Series:
+    candidates = frame[["national_pokedex_number", "name", "character"]].copy()
+    candidates["species_candidate"] = candidates["name"].map(_clean_species_name)
+    species_by_number = (
+        candidates.sort_values(
+            ["national_pokedex_number", "species_candidate"],
+            key=lambda column: column.astype(str).str.len()
+            if column.name == "species_candidate"
+            else column,
+        )
+        .groupby("national_pokedex_number")["species_candidate"]
+        .first()
+        .to_dict()
+    )
+    return frame["national_pokedex_number"].map(species_by_number).fillna(frame["character"])
+
+
+def _clean_species_name(name: str) -> str:
+    text = str(name)
+    if "'s " in text:
+        text = text.split("'s ", 1)[1]
+    for marker in [" with ", " VMAX", " VSTAR", "-EX", " ex", " GX", " V", " Lv.", " Star"]:
+        text = text.split(marker, 1)[0]
+    return text.strip()
+
+
 def _dashboard_html(payload: dict[str, Any]) -> str:
     data = json.dumps(payload)
     title = "Pokemon Portfolio Dashboard"
@@ -588,7 +683,8 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
     th, td {{ text-align: left; padding: 10px 8px; border-bottom: 1px solid #e6e6e1; }}
     th {{ color: #667078; font-size: 12px; text-transform: uppercase; }}
     .cards {{ display: grid; gap: 10px; }}
-    .card-row {{ padding: 12px; display: grid; grid-template-columns: 1fr auto; gap: 8px; }}
+    .card-row {{ padding: 12px; display: grid; grid-template-columns: 54px 1fr auto; gap: 12px; align-items: center; }}
+    .card-row img {{ max-width: 54px; }}
     .owned-list {{ display: grid; gap: 8px; max-height: 520px; overflow: auto; }}
     .owned-card {{ width: 100%; text-align: left; padding: 10px; background: #ffffff; color: #1e2328; display: grid; grid-template-columns: 44px 1fr; gap: 10px; align-items: center; }}
     .owned-card img {{ max-width: 44px; }}
@@ -602,6 +698,12 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
     .premium-row {{ display: grid; grid-template-columns: 48px 1fr 70px 80px 90px 70px; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid #e6e6e1; }}
     .premium-row img {{ max-width: 42px; }}
     .premium-head {{ color: #667078; font-size: 12px; font-weight: 700; text-transform: uppercase; }}
+    .zoomable {{ cursor: zoom-in; }}
+    .modal {{ position: fixed; inset: 0; display: none; place-items: center; background: rgba(0,0,0,.72); z-index: 20; padding: 24px; }}
+    .modal.active {{ display: grid; }}
+    .modal img {{ max-width: min(92vw, 680px); max-height: 92vh; }}
+    .right-stack {{ display: grid; gap: 4px; justify-items: end; }}
+    .small-controls {{ display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 8px; margin-top: 8px; }}
     .muted {{ color: #667078; }}
     @media (max-width: 780px) {{
       main, header {{ padding-left: 16px; padding-right: 16px; }}
@@ -619,6 +721,7 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
     <nav>
       <button class="tab-button active" data-tab="portfolio">Portfolio</button>
       <button class="tab-button" data-tab="add">Add Cards</button>
+      <button class="tab-button" data-tab="wishlist">Wishlist</button>
       <button class="tab-button" data-tab="premium">Character Premium</button>
     </nav>
   </header>
@@ -631,7 +734,7 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
           <div id="selectedCard" class="selected"></div>
         </div>
         <div class="panel">
-          <h2>Owned Variants</h2>
+          <h2>Owned Cards</h2>
           <div class="muted">Edit copies or manual value, remove rows, then export the portfolio CSV.</div>
           <div id="variantTable"></div>
         </div>
@@ -655,22 +758,41 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
         <div id="searchResults" class="search-results"></div>
       </div>
     </section>
+    <section id="tab-wishlist" class="tab-section">
+      <div class="panel">
+        <h2>Wishlist</h2>
+        <div class="muted">Wishlist items do not count toward portfolio totals.</div>
+        <button class="secondary" id="exportWishlist">Export wishlist CSV</button>
+        <div id="wishlistTable"></div>
+      </div>
+    </section>
     <section id="tab-premium" class="tab-section">
       <div class="panel">
         <h2>Character Premium</h2>
-        <div class="muted">Desirability index from print count and average set-rarity price rank.</div>
+        <div class="muted">
+          Score calculation: 1. keep only Pokemon species rows with a National Pokedex number from 1 to 1025;
+          2. roll special names to the species by Pokedex number; 3. rank each card by evaluated price within its set and rarity;
+          4. average those ranks by species; 5. combine inverse average rank with print-count percentile;
+          6. normalize the result to a 1.0-10.0 score.
+        </div>
         <div id="characterPremium"></div>
       </div>
     </section>
   </main>
+  <div class="modal" id="imageModal"><img id="modalImage" alt="Large card image"></div>
   <script>
     const data = {data};
     const portfolioColumns = [
-      "holding_id", "item_type", "card_id", "tcg_price_type", "market_segment", "condition",
+      "holding_id", "item_type", "card_id", "language", "tcg_price_type", "market_segment", "condition",
       "grading_company", "grade", "product_name", "image_url", "copies_owned",
       "purchase_price_each", "estimated_unit_value", "acquired_date", "notes"
     ];
+    const wishlistColumns = [
+      "wishlist_id", "item_type", "card_id", "language", "tcg_price_type", "market_segment",
+      "condition", "grading_company", "grade", "product_name", "target_price", "priority", "notes"
+    ];
     let workingHoldings = data.holdings.map(item => ({{ ...item }}));
+    let workingWishlist = (data.wishlist || []).map(item => ({{ ...item }}));
     let selectedCardId = "";
     const money = value => Number(value || 0).toLocaleString(
       undefined, {{ style: "currency", currency: "USD" }}
@@ -722,7 +844,7 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
       const cards = cardSummaries();
       document.getElementById("ownedList").innerHTML = cards.map(card => `
         <button class="owned-card ${{card.card_id === selectedCardId ? "active" : ""}}" data-card-id="${{card.card_id}}">
-          <img src="${{card.image_url || ""}}" alt="${{card.name || "Card image"}}">
+          <img class="zoomable" src="${{card.image_url || ""}}" alt="${{card.name || "Card image"}}" data-large-src="${{card.image_url || ""}}">
           <span>
             <strong>${{card.name}}</strong>
             <div class="muted">${{card.set_name || "Unknown set"}} - ${{Number(card.copies_owned || 0)}} copies - ${{money(card.total_estimated_value)}}</div>
@@ -732,6 +854,7 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
       document.querySelectorAll(".owned-card").forEach(button => {{
         button.addEventListener("click", () => renderSelected(button.dataset.cardId));
       }});
+      bindZoomImages();
     }}
 
     function renderSelected(cardId) {{
@@ -752,7 +875,7 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
       const card = cardSummaries().find(item => item.card_id === cardId);
       const holdings = workingHoldings.filter(item => item.card_id === cardId);
       document.getElementById("selectedCard").innerHTML = card ? `
-        <img src="${{card.image_url || ""}}" alt="${{card.name || "Card image"}}">
+        <img class="zoomable" src="${{card.image_url || ""}}" alt="${{card.name || "Card image"}}" data-large-src="${{card.image_url || ""}}">
         <div>
           <h2>${{card.name}}</h2>
           <p class="muted">${{card.set_name || "Unknown set"}} - ${{card.card_id}}</p>
@@ -761,18 +884,21 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
         </div>
       ` : "<p>No card holdings yet.</p>";
       renderVariants(holdings);
+      bindZoomImages();
     }}
 
     function renderVariants(holdings) {{
       const rows = holdings.map(item => `
         <tr>
-          <td><img src="${{item.image_url || ""}}" alt="${{item.name || item.product_name || "Item image"}}" style="max-width:42px"></td>
+          <td><img class="zoomable" src="${{item.image_url || ""}}" alt="${{item.name || item.product_name || "Item image"}}" data-large-src="${{item.image_url || ""}}" style="max-width:42px"></td>
           <td>${{item.name || item.product_name || ""}}</td>
           <td>${{item.set_name || ""}}</td>
+          <td>${{item.language || "English"}}</td>
           <td>${{item.market_segment}}</td>
           <td>${{item.condition || item.grading_company + " " + item.grade}}</td>
           <td><input type="number" min="0" step="1" value="${{Number(item.copies_owned || 0)}}" data-holding-id="${{item.holding_id}}" data-field="copies_owned"></td>
-          <td><input type="number" min="0" step="0.01" value="${{Number(item.estimated_unit_value || 0)}}" data-holding-id="${{item.holding_id}}" data-field="estimated_unit_value"></td>
+          <td><input type="number" min="0" step="0.01" value="${{Number(item.estimated_unit_value || 0).toFixed(2)}}" data-holding-id="${{item.holding_id}}" data-field="estimated_unit_value"></td>
+          <td>${{money(item.modeled_fair_price || 0)}}</td>
           <td>${{money(item.total_estimated_value)}}</td>
           <td>${{item.pricing_label || ""}}</td>
           <td><button class="danger" data-remove-id="${{item.holding_id}}">Remove</button></td>
@@ -780,7 +906,7 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
       `).join("");
       document.getElementById("variantTable").innerHTML = `
         <table>
-          <thead><tr><th>Image</th><th>Name</th><th>Set</th><th>Type</th><th>Variant</th><th>Copies</th><th>Each</th><th>Total</th><th>Price Read</th><th></th></tr></thead>
+          <thead><tr><th>Image</th><th>Name</th><th>Set</th><th>Language</th><th>Type</th><th>Variant</th><th>Copies</th><th>Each</th><th>Evaluated Price</th><th>Total</th><th>Perceived Value</th><th></th></tr></thead>
           <tbody>${{rows}}</tbody>
         </table>
       `;
@@ -790,6 +916,7 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
       document.querySelectorAll("#variantTable button[data-remove-id]").forEach(button => {{
         button.addEventListener("click", () => removeHolding(button.dataset.removeId));
       }});
+      bindZoomImages();
     }}
 
     function updateHolding(holdingId, field, value) {{
@@ -816,56 +943,135 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
         : item.condition || "raw";
     }}
 
+    function selectedLanguage(cardId) {{
+      return document.getElementById(`language-${{cardId}}`)?.value || "English";
+    }}
+
+    function standardVariantOptions() {{
+      const raw = [
+        ["raw_nm", "RAW - NM", "raw", "near_mint", "raw", 0],
+        ["raw_lp", "RAW - LP", "raw", "lightly_played", "raw", 0],
+        ["raw_mp", "RAW - MP", "raw", "moderately_played", "raw", 0],
+        ["raw_hp", "RAW - HP", "raw", "heavily_played", "raw", 0],
+        ["raw_dmg", "RAW - DMG", "raw", "damaged", "raw", 0],
+      ];
+      const psa = Array.from({{ length: 10 }}, (_, index) => {{
+        const grade = index + 1;
+        return [`psa_${{grade}}`, `PSA ${{grade}}`, "graded", "", "psa", grade];
+      }});
+      return raw.concat(psa).map(([code, label, market_segment, condition, grading_company, grade]) => ({{
+        code, label, market_segment, condition, grading_company, grade
+      }}));
+    }}
+
+    function selectedVariant(cardId) {{
+      const code = document.getElementById(`variant-${{cardId}}`)?.value || "raw_nm";
+      return standardVariantOptions().find(option => option.code === code) || standardVariantOptions()[0];
+    }}
+
     function renderSearch() {{
       const term = document.getElementById("catalogSearch").value.toLowerCase().trim();
+      const seen = new Set();
       const results = data.catalog.filter(item => {{
         const haystack = [item.card_id, item.name, item.set_name, item.rarity, item.pricing_label]
           .join(" ").toLowerCase();
-        return !term || haystack.includes(term);
+        if (term && !haystack.includes(term)) return false;
+        if (seen.has(item.card_id)) return false;
+        seen.add(item.card_id);
+        return true;
       }}).slice(0, 25);
-      document.getElementById("searchResults").innerHTML = results.map((item, index) => `
+      document.getElementById("searchResults").innerHTML = results.map(item => `
         <div class="search-card">
-          <img src="${{item.image_large || ""}}" alt="${{item.name || "Card image"}}">
+          <img class="zoomable" src="${{item.image_large || ""}}" alt="${{item.name || "Card image"}}" data-large-src="${{item.image_large || ""}}">
           <div>
             <strong>${{item.name}}</strong>
-            <div class="muted">${{item.set_name || ""}} - ${{item.rarity || ""}} - ${{variantLabel(item)}} - ${{money(item.modeled_fair_price || item.observed_price)}}</div>
+            <div class="muted">${{item.set_name || ""}} - ${{item.rarity || ""}}</div>
+            <div class="small-controls">
+              <select id="destination-${{item.card_id}}">
+                <option value="portfolio">Portfolio</option>
+                <option value="wishlist">Wishlist</option>
+              </select>
+              <select id="language-${{item.card_id}}">
+                <option>English</option>
+                <option>Japanese</option>
+              </select>
+              <select id="variant-${{item.card_id}}">
+                ${{standardVariantOptions().map(variant => `
+                  <option value="${{variant.code}}">${{variant.label}}</option>
+                `).join("")}}
+              </select>
+              <button data-card-id="${{item.card_id}}">Add</button>
+            </div>
           </div>
-          <button data-index="${{index}}">Add</button>
+          <div class="right-stack">
+            <span class="muted">Evaluated Price</span>
+            <strong>${{money(item.modeled_fair_price || item.observed_price)}}</strong>
+            <span class="muted">${{item.pricing_label || ""}}</span>
+          </div>
         </div>
       `).join("") || `<div class="empty">No matching cards found.</div>`;
       document.querySelectorAll("#searchResults button").forEach(button => {{
-        button.addEventListener("click", () => addCatalogItem(results[Number(button.dataset.index)]));
+        button.addEventListener("click", () => addCatalogItem(button.dataset.cardId));
       }});
+      bindZoomImages();
     }}
 
-    function addCatalogItem(item) {{
+    function addCatalogItem(cardId) {{
+      const item = data.catalog.find(record => record.card_id === cardId);
+      const variant = selectedVariant(cardId);
+      const destination = document.getElementById(`destination-${{cardId}}`).value;
+      const language = selectedLanguage(cardId);
       const copies = 1;
       const unitValue = Number(item.modeled_fair_price || item.observed_price || 0);
-      workingHoldings.push({{
-        holding_id: `web-${{Date.now()}}`,
+      const common = {{
         item_type: "card",
         card_id: item.card_id,
+        language,
+        tcg_price_type: item.tcg_price_type || "",
+        market_segment: variant.market_segment,
+        condition: variant.condition,
+        grading_company: variant.grading_company,
+        grade: variant.grade,
+        product_name: item.name,
+        notes: "Added from dashboard",
+      }};
+      if (destination === "wishlist") {{
+        workingWishlist.push({{
+          wishlist_id: `wish-${{Date.now()}}`,
+          ...common,
+          target_price: "",
+          priority: "medium",
+          name: item.name,
+          set_name: item.set_name,
+          rarity: item.rarity,
+          image_url: item.image_large || "",
+          modeled_fair_price: item.modeled_fair_price || "",
+          observed_price: item.observed_price || "",
+          pricing_label: item.pricing_label || "",
+        }});
+        renderWishlist();
+        showTab("wishlist");
+        return;
+      }}
+      workingHoldings.push({{
+        holding_id: `web-${{Date.now()}}`,
+        ...common,
         name: item.name,
         set_name: item.set_name,
         rarity: item.rarity,
-        product_name: item.name,
         image_url: item.image_large || "",
-        tcg_price_type: item.tcg_price_type || "",
-        market_segment: item.market_segment || "raw",
-        condition: item.condition || "",
-        grading_company: item.grading_company || "",
-        grade: item.grade || 0,
         copies_owned: copies,
         purchase_price_each: "",
         estimated_unit_value: unitValue,
+        modeled_fair_price: Number(item.modeled_fair_price || 0),
         total_estimated_value: unitValue * copies,
         acquired_date: "",
-        notes: "Added from dashboard",
         pricing_label: item.pricing_label || "",
         source_name: "dashboard"
       }});
       renderStats();
       renderSelected(item.card_id);
+      showTab("portfolio");
     }}
 
     function renderCharacterPremium() {{
@@ -921,14 +1127,60 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
       URL.revokeObjectURL(url);
     }}
 
+    function exportWishlistCsv() {{
+      const rows = [wishlistColumns.join(",")].concat(workingWishlist.map(item =>
+        wishlistColumns.map(column => csvEscape(item[column])).join(",")
+      ));
+      const blob = new Blob([rows.join("\\n")], {{ type: "text/csv" }});
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "wishlist.csv";
+      link.click();
+      URL.revokeObjectURL(url);
+    }}
+
+    function removeWishlistItem(wishlistId) {{
+      workingWishlist = workingWishlist.filter(item => item.wishlist_id !== wishlistId);
+      renderWishlist();
+    }}
+
+    function renderWishlist() {{
+      const rows = workingWishlist.map(item => `
+        <tr>
+          <td><img class="zoomable" src="${{item.image_url || ""}}" data-large-src="${{item.image_url || ""}}" alt="${{item.name || item.product_name || "Wishlist item"}}" style="max-width:42px"></td>
+          <td>${{item.name || item.product_name || ""}}</td>
+          <td>${{item.set_name || ""}}</td>
+          <td>${{item.language || "English"}}</td>
+          <td>${{variantLabel(item)}}</td>
+          <td>${{money(item.modeled_fair_price || item.observed_price || 0)}}</td>
+          <td>${{item.pricing_label || ""}}</td>
+          <td><button class="danger" data-wishlist-remove-id="${{item.wishlist_id}}">Remove</button></td>
+        </tr>
+      `).join("");
+      document.getElementById("wishlistTable").innerHTML = rows
+        ? `<table><thead><tr><th>Image</th><th>Name</th><th>Set</th><th>Language</th><th>Variant</th><th>Evaluated Price</th><th>Perceived Value</th><th></th></tr></thead><tbody>${{rows}}</tbody></table>`
+        : `<div class="empty">No wishlist cards yet. Add cards from the Add Cards tab.</div>`;
+      document.querySelectorAll("#wishlistTable button[data-wishlist-remove-id]").forEach(button => {{
+        button.addEventListener("click", () => removeWishlistItem(button.dataset.wishlistRemoveId));
+      }});
+      bindZoomImages();
+    }}
+
     function renderRecommendations() {{
       const cards = data.recommendations.slice(0, 12).map(item => `
         <div class="card-row">
-          <div><strong>${{item.name}}</strong><div class="muted">${{item.set_name || ""}} - ${{item.rarity || ""}} - ${{item.pricing_label || ""}}</div></div>
-          <div>${{money(item.modeled_fair_price || item.observed_price)}}</div>
+          <img class="zoomable" src="${{item.image_large || item.image_small || ""}}" data-large-src="${{item.image_large || item.image_small || ""}}" alt="${{item.name || "Card image"}}">
+          <div><strong>${{item.name}}</strong><div class="muted">${{item.set_name || ""}} - ${{item.rarity || ""}} - ${{variantLabel(item)}}</div></div>
+          <div class="right-stack">
+            <span class="muted">Evaluated Price</span>
+            <strong>${{money(item.modeled_fair_price || item.observed_price)}}</strong>
+            <span class="muted">${{item.pricing_label || ""}}</span>
+          </div>
         </div>
       `).join("");
       document.getElementById("recommendations").innerHTML = cards || "<p>No recommendations yet.</p>";
+      bindZoomImages();
     }}
 
     function renderHistory() {{
@@ -940,15 +1192,32 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
       ` : "<p>No snapshots yet.</p>";
     }}
 
+    function bindZoomImages() {{
+      document.querySelectorAll("img.zoomable").forEach(image => {{
+        image.onclick = event => {{
+          event.stopPropagation();
+          const source = image.dataset.largeSrc || image.src;
+          if (!source) return;
+          document.getElementById("modalImage").src = source;
+          document.getElementById("imageModal").classList.add("active");
+        }};
+      }});
+    }}
+
     renderStats();
     renderOwnedList();
     renderSelected("");
     renderRecommendations();
+    renderWishlist();
     renderHistory();
     renderSearch();
     renderCharacterPremium();
     document.getElementById("catalogSearch").addEventListener("input", renderSearch);
     document.getElementById("exportPortfolio").addEventListener("click", exportPortfolioCsv);
+    document.getElementById("exportWishlist").addEventListener("click", exportWishlistCsv);
+    document.getElementById("imageModal").addEventListener("click", () => {{
+      document.getElementById("imageModal").classList.remove("active");
+    }});
     document.querySelectorAll(".tab-button").forEach(button => {{
       button.addEventListener("click", () => showTab(button.dataset.tab));
     }});

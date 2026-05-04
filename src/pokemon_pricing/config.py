@@ -57,6 +57,7 @@ GRADING_COMPANY_SCORE = {
 
 VARIANT_KEY_COLUMNS = [
     "card_id",
+    "language",
     "tcg_price_type",
     "market_segment",
     "condition",

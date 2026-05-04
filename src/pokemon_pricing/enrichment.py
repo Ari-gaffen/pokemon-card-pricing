@@ -6,6 +6,7 @@ from pokemon_pricing.config import GRADING_COMPANY_SCORE, RAW_CONDITION_SCORE
 
 ENRICHMENT_COLUMNS = [
     "card_id",
+    "language",
     "tcg_price_type",
     "market_segment",
     "condition",
@@ -57,6 +58,7 @@ def normalize_enrichment(enrichment: pd.DataFrame) -> pd.DataFrame:
             normalized[column] = None
 
     normalized["market_segment"] = normalized["market_segment"].str.lower().str.strip()
+    normalized["language"] = normalized["language"].fillna("English").str.strip()
     normalized["condition"] = normalized["condition"].fillna("").str.lower().str.strip()
     normalized["grading_company"] = (
         normalized["grading_company"].fillna("").str.lower().str.strip()
@@ -75,6 +77,7 @@ def append_price_variants(card_frame: pd.DataFrame, enrichment: pd.DataFrame) ->
     """Return one row per priced variant: baseline raw NM plus optional enrichment rows."""
     base = card_frame.copy()
     base["market_segment"] = "raw"
+    base["language"] = base.get("language", "English")
     base["condition"] = "near_mint"
     base["grading_company"] = "raw"
     base["grade"] = 0

@@ -24,6 +24,7 @@ def cards_to_frame(cards: list[dict[str, Any]]) -> pd.DataFrame:
         raise ValueError("No cards were provided.")
     rows = [_flatten_card(card) for card in cards]
     frame = pd.DataFrame(rows)
+    frame["character"] = canonical_species_names(frame)
     return add_character_premium_features(frame)
 
 
@@ -42,6 +43,7 @@ def _flatten_card(card: dict[str, Any]) -> dict[str, Any]:
         "card_id": card.get("id"),
         "name": card.get("name"),
         "character": _character_name(card.get("name", "")),
+        "language": "English",
         "supertype": card.get("supertype"),
         "rarity": card.get("rarity"),
         "rarity_score": RARITY_ORDER.get(card.get("rarity"), np.nan),
@@ -80,13 +82,43 @@ def add_character_premium_features(frame: pd.DataFrame) -> pd.DataFrame:
 
     rank_group = ["set_id", "rarity"]
     frame["set_rarity_price_rank"] = frame.groupby(rank_group)["tcg_market"].rank(
-        method="average", ascending=False, pct=True
+        method="average", ascending=False
     )
     frame["character_avg_set_rarity_price_rank"] = frame.groupby("character")[
         "set_rarity_price_rank"
     ].transform("mean")
 
     return frame
+
+
+def canonical_species_names(frame: pd.DataFrame) -> pd.Series:
+    """Roll special card names up to a likely Pokemon species name."""
+    if "national_pokedex_number" not in frame.columns:
+        return frame["character"]
+
+    pokemon = frame[
+        (frame.get("supertype") == "Pokémon")
+        & pd.to_numeric(frame["national_pokedex_number"], errors="coerce").between(1, 1025)
+    ].copy()
+    if pokemon.empty:
+        return frame["character"]
+
+    pokemon["candidate_species"] = pokemon["name"].map(_character_name)
+    species_by_number = (
+        pokemon.sort_values(
+            by=["national_pokedex_number", "candidate_species"],
+            key=lambda column: column.astype(str).str.len()
+            if column.name == "candidate_species"
+            else column,
+        )
+        .groupby("national_pokedex_number")["candidate_species"]
+        .first()
+        .to_dict()
+    )
+    return frame.apply(
+        lambda row: species_by_number.get(row.get("national_pokedex_number"), row.get("character")),
+        axis=1,
+    )
 
 
 def model_frame(frame: pd.DataFrame) -> pd.DataFrame:
@@ -132,6 +164,8 @@ def _first_price_bucket(prices: dict[str, dict[str, float]]) -> dict[str, Any]:
 
 
 def _character_name(name: str) -> str:
+    if "'s " in name:
+        name = name.split("'s ", 1)[1]
     separators = [" VMAX", " VSTAR", "-EX", " ex", " GX", " V", " Lv.", " Star"]
     character = name
     for separator in separators:
