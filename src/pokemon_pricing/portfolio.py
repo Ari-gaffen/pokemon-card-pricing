@@ -583,15 +583,23 @@ def _character_premium_records(catalog: pd.DataFrame | None) -> list[dict[str, A
             avg_set_rarity_price_rank=("set_rarity_price_rank", "mean"),
             print_count=("card_id", "nunique"),
             image_url=("image_small", "first"),
+            market_to_evaluated=("pricing_ratio", "median"),
         )
         .reset_index()
     )
     if grouped.empty:
         return []
 
-    grouped["rank_signal"] = 1 / grouped["avg_set_rarity_price_rank"].clip(lower=0.01)
+    grouped["market_to_evaluated"] = pd.to_numeric(
+        grouped["market_to_evaluated"], errors="coerce"
+    ).fillna(1.0)
+    grouped["rank_signal"] = 1 / grouped["avg_set_rarity_price_rank"].clip(lower=1)
     grouped["print_signal"] = grouped["print_count"].rank(method="average", pct=True)
-    grouped["premium_raw"] = grouped["rank_signal"] * (1 + grouped["print_signal"])
+    grouped["premium_raw"] = (
+        grouped["market_to_evaluated"].clip(lower=0)
+        * grouped["rank_signal"]
+        * (1 + grouped["print_signal"])
+    )
     grouped["print_count_weighted_rank"] = grouped["premium_raw"].rank(
         method="dense", ascending=False
     )
@@ -690,6 +698,7 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
     .owned-card img {{ max-width: 44px; }}
     .owned-card.active {{ border-color: #1e2328; box-shadow: inset 3px 0 0 #1e2328; }}
     .toolbar {{ display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }}
+    .header-controls {{ display: grid; grid-template-columns: repeat(3, minmax(150px, 220px)); gap: 10px; margin: 10px 0 14px; }}
     .search-results {{ display: grid; gap: 10px; margin-top: 12px; }}
     .search-card {{ display: grid; grid-template-columns: 52px 1fr auto; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid #e6e6e1; }}
     .search-card img {{ max-width: 52px; }}
@@ -755,6 +764,11 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
           <input id="catalogSearch" type="search" placeholder="Search by card name, set, rarity, or card id">
           <button class="secondary" id="exportPortfolio">Export portfolio CSV</button>
         </div>
+        <div class="header-controls">
+          <select id="addDestination"><option value="portfolio">Portfolio</option><option value="wishlist">Wishlist</option></select>
+          <select id="addLanguage"><option>English</option><option>Japanese</option></select>
+          <select id="valueFilter"><option value="all">All Values</option><option value="under_priced">Under Priced</option><option value="well_priced">Well Priced</option><option value="over_priced">Over Priced</option></select>
+        </div>
         <div id="searchResults" class="search-results"></div>
       </div>
     </section>
@@ -772,8 +786,9 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
         <div class="muted">
           Score calculation: 1. keep only Pokemon species rows with a National Pokedex number from 1 to 1025;
           2. roll special names to the species by Pokedex number; 3. rank each card by evaluated price within its set and rarity;
-          4. average those ranks by species; 5. combine inverse average rank with print-count percentile;
-          6. normalize the result to a 1.0-10.0 score.
+          4. average those ranks by species; 5. estimate popularity tax from market price divided by evaluated price;
+          6. combine popularity tax, inverse average rank, and print-count percentile;
+          7. normalize the result to a 1.0-10.0 score.
         </div>
         <div id="characterPremium"></div>
       </div>
@@ -894,8 +909,7 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
           <td>${{item.name || item.product_name || ""}}</td>
           <td>${{item.set_name || ""}}</td>
           <td>${{item.language || "English"}}</td>
-          <td>${{item.market_segment}}</td>
-          <td>${{item.condition || item.grading_company + " " + item.grade}}</td>
+          <td>${{variantSelect(item.holding_id, variantCode(item))}}</td>
           <td><input type="number" min="0" step="1" value="${{Number(item.copies_owned || 0)}}" data-holding-id="${{item.holding_id}}" data-field="copies_owned"></td>
           <td><input type="number" min="0" step="0.01" value="${{Number(item.estimated_unit_value || 0).toFixed(2)}}" data-holding-id="${{item.holding_id}}" data-field="estimated_unit_value"></td>
           <td>${{money(item.modeled_fair_price || 0)}}</td>
@@ -906,12 +920,15 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
       `).join("");
       document.getElementById("variantTable").innerHTML = `
         <table>
-          <thead><tr><th>Image</th><th>Name</th><th>Set</th><th>Language</th><th>Type</th><th>Variant</th><th>Copies</th><th>Each</th><th>Evaluated Price</th><th>Total</th><th>Perceived Value</th><th></th></tr></thead>
+          <thead><tr><th>Image</th><th>Name</th><th>Set</th><th>Language</th><th>Variant</th><th>Copies</th><th>Market Price</th><th>Evaluated Price</th><th>Total</th><th>Perceived Value</th><th></th></tr></thead>
           <tbody>${{rows}}</tbody>
         </table>
       `;
       document.querySelectorAll("#variantTable input").forEach(input => {{
         input.addEventListener("change", () => updateHolding(input.dataset.holdingId, input.dataset.field, input.value));
+      }});
+      document.querySelectorAll("#variantTable select[data-variant-target]").forEach(select => {{
+        select.addEventListener("change", () => updateHoldingVariant(select.dataset.variantTarget));
       }});
       document.querySelectorAll("#variantTable button[data-remove-id]").forEach(button => {{
         button.addEventListener("click", () => removeHolding(button.dataset.removeId));
@@ -928,6 +945,23 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
       renderSelected(selectedCardId);
     }}
 
+    function updateHoldingVariant(holdingId) {{
+      const holding = workingHoldings.find(item => item.holding_id === holdingId);
+      if (!holding) return;
+      const variant = selectedVariantForElement(holdingId);
+      const next = priced(holding, variant);
+      holding.market_segment = variant.market_segment;
+      holding.condition = variant.condition;
+      holding.grading_company = variant.grading_company;
+      holding.grade = variant.grade;
+      holding.estimated_unit_value = next.market;
+      holding.modeled_fair_price = next.evaluated;
+      holding.pricing_label = next.label;
+      holding.total_estimated_value = Number(holding.copies_owned || 0) * next.market;
+      renderStats();
+      renderSelected(selectedCardId);
+    }}
+
     function removeHolding(holdingId) {{
       const removed = workingHoldings.find(item => item.holding_id === holdingId);
       workingHoldings = workingHoldings.filter(item => item.holding_id !== holdingId);
@@ -938,91 +972,128 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
     }}
 
     function variantLabel(item) {{
-      return item.market_segment === "graded"
-        ? `${{item.grading_company || ""}} ${{item.grade || ""}}`.trim()
-        : item.condition || "raw";
-    }}
-
-    function selectedLanguage(cardId) {{
-      return document.getElementById(`language-${{cardId}}`)?.value || "English";
+      if (item.market_segment === "graded") return `PSA ${{item.grade || ""}}`.trim();
+      const conditionMap = {{
+        near_mint: "RAW - NM",
+        lightly_played: "RAW - LP",
+        moderately_played: "RAW - MP",
+        heavily_played: "RAW - HP",
+        damaged: "RAW - DMG",
+      }};
+      return conditionMap[item.condition] || "RAW - NM";
     }}
 
     function standardVariantOptions() {{
       const raw = [
-        ["raw_nm", "RAW - NM", "raw", "near_mint", "raw", 0],
-        ["raw_lp", "RAW - LP", "raw", "lightly_played", "raw", 0],
-        ["raw_mp", "RAW - MP", "raw", "moderately_played", "raw", 0],
-        ["raw_hp", "RAW - HP", "raw", "heavily_played", "raw", 0],
-        ["raw_dmg", "RAW - DMG", "raw", "damaged", "raw", 0],
+        ["raw_nm", "RAW - NM", "raw", "near_mint", "raw", 0, 1.00],
+        ["raw_lp", "RAW - LP", "raw", "lightly_played", "raw", 0, 0.75],
+        ["raw_mp", "RAW - MP", "raw", "moderately_played", "raw", 0, 0.55],
+        ["raw_hp", "RAW - HP", "raw", "heavily_played", "raw", 0, 0.35],
+        ["raw_dmg", "RAW - DMG", "raw", "damaged", "raw", 0, 0.20],
       ];
+      const gradeMultipliers = {{ 1: 0.25, 2: 0.35, 3: 0.5, 4: 0.75, 5: 1, 6: 1.4, 7: 2, 8: 3.5, 9: 7, 10: 20 }};
       const psa = Array.from({{ length: 10 }}, (_, index) => {{
         const grade = index + 1;
-        return [`psa_${{grade}}`, `PSA ${{grade}}`, "graded", "", "psa", grade];
+        return [`psa_${{grade}}`, `PSA ${{grade}}`, "graded", "", "psa", grade, gradeMultipliers[grade]];
       }});
-      return raw.concat(psa).map(([code, label, market_segment, condition, grading_company, grade]) => ({{
-        code, label, market_segment, condition, grading_company, grade
+      return raw.concat(psa).map(([code, label, market_segment, condition, grading_company, grade, multiplier]) => ({{
+        code, label, market_segment, condition, grading_company, grade, multiplier
       }}));
     }}
 
-    function selectedVariant(cardId) {{
-      const code = document.getElementById(`variant-${{cardId}}`)?.value || "raw_nm";
+    function variantCode(item) {{
+      if (item.market_segment === "graded") return `psa_${{Number(item.grade || 0)}}`;
+      const conditionMap = {{
+        near_mint: "raw_nm",
+        lightly_played: "raw_lp",
+        moderately_played: "raw_mp",
+        heavily_played: "raw_hp",
+        damaged: "raw_dmg",
+      }};
+      return conditionMap[item.condition] || "raw_nm";
+    }}
+
+    function variantSelect(id, selectedCode) {{
+      return `<select data-variant-target="${{id}}">${{standardVariantOptions().map(variant => `
+        <option value="${{variant.code}}" ${{variant.code === selectedCode ? "selected" : ""}}>${{variant.label}}</option>
+      `).join("")}}</select>`;
+    }}
+
+    function selectedVariantForElement(id) {{
+      const code = document.querySelector(`select[data-variant-target="${{id}}"]`)?.value || "raw_nm";
       return standardVariantOptions().find(option => option.code === code) || standardVariantOptions()[0];
+    }}
+
+    function priced(base, variant) {{
+      const evaluated = Number(base.modeled_fair_price || base.estimated_unit_value || base.observed_price || 0) * variant.multiplier;
+      const market = Number(base.observed_price || base.estimated_unit_value || 0) * variant.multiplier;
+      return {{ evaluated, market, label: perceivedValue(market, evaluated) }};
+    }}
+
+    function perceivedValue(market, evaluated) {{
+      if (!evaluated) return "";
+      const ratio = market / evaluated;
+      if (ratio > 1.15) return "over_priced";
+      if (ratio < 0.85) return "under_priced";
+      return "well_priced";
     }}
 
     function renderSearch() {{
       const term = document.getElementById("catalogSearch").value.toLowerCase().trim();
+      const valueFilter = document.getElementById("valueFilter").value;
+      const language = document.getElementById("addLanguage").value;
       const seen = new Set();
       const results = data.catalog.filter(item => {{
         const haystack = [item.card_id, item.name, item.set_name, item.rarity, item.pricing_label]
           .join(" ").toLowerCase();
         if (term && !haystack.includes(term)) return false;
+        if (valueFilter !== "all" && item.pricing_label !== valueFilter) return false;
         if (seen.has(item.card_id)) return false;
         seen.add(item.card_id);
         return true;
       }}).slice(0, 25);
-      document.getElementById("searchResults").innerHTML = results.map(item => `
-        <div class="search-card">
+      document.getElementById("searchResults").innerHTML = results.map((item, index) => `
+        <div class="card-row" data-search-card="${{item.card_id}}">
           <img class="zoomable" src="${{item.image_large || ""}}" alt="${{item.name || "Card image"}}" data-large-src="${{item.image_large || ""}}">
           <div>
             <strong>${{item.name}}</strong>
-            <div class="muted">${{item.set_name || ""}} - ${{item.rarity || ""}}</div>
-            <div class="small-controls">
-              <select id="destination-${{item.card_id}}">
-                <option value="portfolio">Portfolio</option>
-                <option value="wishlist">Wishlist</option>
-              </select>
-              <select id="language-${{item.card_id}}">
-                <option>English</option>
-                <option>Japanese</option>
-              </select>
-              <select id="variant-${{item.card_id}}">
-                ${{standardVariantOptions().map(variant => `
-                  <option value="${{variant.code}}">${{variant.label}}</option>
-                `).join("")}}
-              </select>
-              <button data-card-id="${{item.card_id}}">Add</button>
-            </div>
+            <div class="muted">${{item.set_name || ""}} - ${{item.rarity || ""}} - ${{language}}</div>
+            ${{variantSelect(`search-${{index}}`, "raw_nm")}}
           </div>
           <div class="right-stack">
             <span class="muted">Evaluated Price</span>
-            <strong>${{money(item.modeled_fair_price || item.observed_price)}}</strong>
-            <span class="muted">${{item.pricing_label || ""}}</span>
+            <strong data-eval="${{index}}">${{money(priced(item, standardVariantOptions()[0]).evaluated)}}</strong>
+            <span class="muted">Market Price</span>
+            <strong data-market="${{index}}">${{money(priced(item, standardVariantOptions()[0]).market)}}</strong>
+            <span class="muted" data-perceived="${{index}}">${{priced(item, standardVariantOptions()[0]).label}}</span>
+            <button data-index="${{index}}">Add</button>
           </div>
         </div>
       `).join("") || `<div class="empty">No matching cards found.</div>`;
       document.querySelectorAll("#searchResults button").forEach(button => {{
-        button.addEventListener("click", () => addCatalogItem(button.dataset.cardId));
+        button.addEventListener("click", () => addCatalogItem(results[Number(button.dataset.index)], button.dataset.index));
+      }});
+      document.querySelectorAll("#searchResults select[data-variant-target]").forEach(select => {{
+        select.addEventListener("change", () => updateSearchCard(results[Number(select.dataset.variantTarget.replace("search-", ""))], select.dataset.variantTarget.replace("search-", "")));
       }});
       bindZoomImages();
     }}
 
-    function addCatalogItem(cardId) {{
-      const item = data.catalog.find(record => record.card_id === cardId);
-      const variant = selectedVariant(cardId);
-      const destination = document.getElementById(`destination-${{cardId}}`).value;
-      const language = selectedLanguage(cardId);
+    function updateSearchCard(item, index) {{
+      const variant = selectedVariantForElement(`search-${{index}}`);
+      const next = priced(item, variant);
+      document.querySelector(`[data-eval="${{index}}"]`).textContent = money(next.evaluated);
+      document.querySelector(`[data-market="${{index}}"]`).textContent = money(next.market);
+      document.querySelector(`[data-perceived="${{index}}"]`).textContent = next.label;
+    }}
+
+    function addCatalogItem(item, index) {{
+      const variant = selectedVariantForElement(`search-${{index}}`);
+      const destination = document.getElementById("addDestination").value;
+      const language = document.getElementById("addLanguage").value;
       const copies = 1;
-      const unitValue = Number(item.modeled_fair_price || item.observed_price || 0);
+      const next = priced(item, variant);
+      const unitValue = next.market;
       const common = {{
         item_type: "card",
         card_id: item.card_id,
@@ -1045,9 +1116,9 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
           set_name: item.set_name,
           rarity: item.rarity,
           image_url: item.image_large || "",
-          modeled_fair_price: item.modeled_fair_price || "",
-          observed_price: item.observed_price || "",
-          pricing_label: item.pricing_label || "",
+          modeled_fair_price: next.evaluated,
+          observed_price: next.market,
+          pricing_label: next.label,
         }});
         renderWishlist();
         showTab("wishlist");
@@ -1063,10 +1134,10 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
         copies_owned: copies,
         purchase_price_each: "",
         estimated_unit_value: unitValue,
-        modeled_fair_price: Number(item.modeled_fair_price || 0),
+        modeled_fair_price: next.evaluated,
         total_estimated_value: unitValue * copies,
         acquired_date: "",
-        pricing_label: item.pricing_label || "",
+        pricing_label: next.label,
         source_name: "dashboard"
       }});
       renderStats();
@@ -1152,35 +1223,68 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
           <td>${{item.name || item.product_name || ""}}</td>
           <td>${{item.set_name || ""}}</td>
           <td>${{item.language || "English"}}</td>
-          <td>${{variantLabel(item)}}</td>
+          <td>${{variantSelect(item.wishlist_id, variantCode(item))}}</td>
           <td>${{money(item.modeled_fair_price || item.observed_price || 0)}}</td>
+          <td>${{money(item.observed_price || 0)}}</td>
           <td>${{item.pricing_label || ""}}</td>
           <td><button class="danger" data-wishlist-remove-id="${{item.wishlist_id}}">Remove</button></td>
         </tr>
       `).join("");
       document.getElementById("wishlistTable").innerHTML = rows
-        ? `<table><thead><tr><th>Image</th><th>Name</th><th>Set</th><th>Language</th><th>Variant</th><th>Evaluated Price</th><th>Perceived Value</th><th></th></tr></thead><tbody>${{rows}}</tbody></table>`
+        ? `<table><thead><tr><th>Image</th><th>Name</th><th>Set</th><th>Language</th><th>Variant</th><th>Evaluated Price</th><th>Market Price</th><th>Perceived Value</th><th></th></tr></thead><tbody>${{rows}}</tbody></table>`
         : `<div class="empty">No wishlist cards yet. Add cards from the Add Cards tab.</div>`;
+      document.querySelectorAll("#wishlistTable select[data-variant-target]").forEach(select => {{
+        select.addEventListener("change", () => updateWishlistVariant(select.dataset.variantTarget));
+      }});
       document.querySelectorAll("#wishlistTable button[data-wishlist-remove-id]").forEach(button => {{
         button.addEventListener("click", () => removeWishlistItem(button.dataset.wishlistRemoveId));
       }});
       bindZoomImages();
     }}
 
+    function updateWishlistVariant(wishlistId) {{
+      const item = workingWishlist.find(record => record.wishlist_id === wishlistId);
+      if (!item) return;
+      const variant = selectedVariantForElement(wishlistId);
+      const next = priced(item, variant);
+      item.market_segment = variant.market_segment;
+      item.condition = variant.condition;
+      item.grading_company = variant.grading_company;
+      item.grade = variant.grade;
+      item.modeled_fair_price = next.evaluated;
+      item.observed_price = next.market;
+      item.pricing_label = next.label;
+      renderWishlist();
+    }}
+
     function renderRecommendations() {{
-      const cards = data.recommendations.slice(0, 12).map(item => `
-        <div class="card-row">
+      const cards = data.recommendations.slice(0, 12).map((item, index) => `
+        <div class="card-row" data-rec-card="${{index}}">
           <img class="zoomable" src="${{item.image_large || item.image_small || ""}}" data-large-src="${{item.image_large || item.image_small || ""}}" alt="${{item.name || "Card image"}}">
-          <div><strong>${{item.name}}</strong><div class="muted">${{item.set_name || ""}} - ${{item.rarity || ""}} - ${{variantLabel(item)}}</div></div>
+          <div><strong>${{item.name}}</strong><div class="muted">${{item.set_name || ""}} - ${{item.rarity || ""}}</div>${{variantSelect(`rec-${{index}}`, "raw_nm")}}</div>
           <div class="right-stack">
             <span class="muted">Evaluated Price</span>
-            <strong>${{money(item.modeled_fair_price || item.observed_price)}}</strong>
-            <span class="muted">${{item.pricing_label || ""}}</span>
+            <strong data-rec-eval="${{index}}">${{money(priced(item, standardVariantOptions()[0]).evaluated)}}</strong>
+            <span class="muted">Market Price</span>
+            <strong data-rec-market="${{index}}">${{money(priced(item, standardVariantOptions()[0]).market)}}</strong>
+            <span class="muted" data-rec-perceived="${{index}}">${{priced(item, standardVariantOptions()[0]).label}}</span>
           </div>
         </div>
       `).join("");
       document.getElementById("recommendations").innerHTML = cards || "<p>No recommendations yet.</p>";
+      document.querySelectorAll("#recommendations select[data-variant-target]").forEach(select => {{
+        select.addEventListener("change", () => updateRecommendationCard(Number(select.dataset.variantTarget.replace("rec-", ""))));
+      }});
       bindZoomImages();
+    }}
+
+    function updateRecommendationCard(index) {{
+      const item = data.recommendations[index];
+      const variant = selectedVariantForElement(`rec-${{index}}`);
+      const next = priced(item, variant);
+      document.querySelector(`[data-rec-eval="${{index}}"]`).textContent = money(next.evaluated);
+      document.querySelector(`[data-rec-market="${{index}}"]`).textContent = money(next.market);
+      document.querySelector(`[data-rec-perceived="${{index}}"]`).textContent = next.label;
     }}
 
     function renderHistory() {{
@@ -1213,6 +1317,8 @@ def _dashboard_html(payload: dict[str, Any]) -> str:
     renderSearch();
     renderCharacterPremium();
     document.getElementById("catalogSearch").addEventListener("input", renderSearch);
+    document.getElementById("addLanguage").addEventListener("change", renderSearch);
+    document.getElementById("valueFilter").addEventListener("change", renderSearch);
     document.getElementById("exportPortfolio").addEventListener("click", exportPortfolioCsv);
     document.getElementById("exportWishlist").addEventListener("click", exportWishlistCsv);
     document.getElementById("imageModal").addEventListener("click", () => {{

@@ -239,8 +239,9 @@ Character Premium score calculation:
 2. Roll special card names up to the species by Pokedex number, so cards like `Pikachu with Grey Felt Hat` become `Pikachu`.
 3. Rank each card by evaluated price within its set and rarity group.
 4. Average those set-rarity price ranks by species.
-5. Combine inverse average rank with print-count percentile.
-6. Normalize the resulting desirability score to a 1.0-10.0 scale.
+5. Estimate character popularity tax from `market price / evaluated price`.
+6. Combine popularity tax, inverse average rank, and print-count percentile.
+7. Normalize the resulting desirability score to a 1.0-10.0 scale.
 
 ## Suggested Next Steps
 
